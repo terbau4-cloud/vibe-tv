@@ -1,0 +1,6 @@
+{
+  "name": "VibeTV",
+  "description": "Instant live video chat and social discovery with real-time camera preview, country filters, and animated reactions.",
+  "requestFramePermissions": ["android.permission.CAMERA"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
