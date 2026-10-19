@@ -77,6 +77,7 @@ fun PartnerVideoFeed(
     onSendReaction: (String) -> Unit,
     onSkip: () -> Unit,
     onReport: () -> Unit,
+    onBackToStart: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var callSeconds by remember(partner.id) { mutableIntStateOf(0) }
@@ -126,8 +127,10 @@ fun PartnerVideoFeed(
             .testTag("partner_video_feed")
             .pointerInput(partner.id) {
                 detectHorizontalDragGestures { _, dragAmount ->
-                    if (dragAmount < -25f) {
+                    if (dragAmount < -20f) {
                         onSkip()
+                    } else if (dragAmount > 20f) {
+                        onBackToStart()
                     }
                 }
             }

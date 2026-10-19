@@ -21,7 +21,7 @@ import kotlin.random.Random
 
 data class VideoChatUiState(
     val connectionState: ChatConnectionState = ChatConnectionState.IDLE,
-    val onlineUsersCount: Int = 1,
+    val onlineUsersCount: Int = 2,
     val selectedGender: Gender = Gender.MALE,
     val selectedCountry: Country = Country.ALL,
     val currentPartner: PartnerProfile? = null,
@@ -59,25 +59,28 @@ class VideoChatViewModel : ViewModel() {
     val uiState: StateFlow<VideoChatUiState> = _uiState.asStateFlow()
 
     private var partnerInteractionJob: Job? = null
+    private var matchingJob: Job? = null
     private var fullScreenEmojiJob: Job? = null
     var onSpeakRequested: ((text: String, countryCode: String) -> Unit)? = null
 
-    fun signInWithGoogle(name: String = "Google User", email: String = "user@gmail.com") {
+    fun authenticateUser(name: String, email: String, gender: Gender = Gender.MALE) {
+        _uiState.update {
+            it.copy(
+                isUserSignedIn = true,
+                userName = name,
+                userEmail = email,
+                selectedGender = gender,
+                bannerNotice = "Welcome to VibeTV, $name!"
+            )
+        }
         viewModelScope.launch {
-            _uiState.update { it.copy(isSigningInWithGoogle = true) }
-            delay(500)
-            _uiState.update {
-                it.copy(
-                    isUserSignedIn = true,
-                    isSigningInWithGoogle = false,
-                    userName = name,
-                    userEmail = email,
-                    bannerNotice = "Welcome to VibeTV, $name!"
-                )
-            }
             delay(2500)
             _uiState.update { if (it.bannerNotice?.startsWith("Welcome") == true) it.copy(bannerNotice = null) else it }
         }
+    }
+
+    fun signInWithGoogle(name: String = "Google User", email: String = "user@gmail.com") {
+        authenticateUser(name, email)
     }
 
     fun signOut() {
@@ -97,15 +100,14 @@ class VideoChatViewModel : ViewModel() {
     }
 
     private fun updateOnlineCount() {
-        // Show real online count: 1 when alone, 2 when connected
         _uiState.update { state ->
-            val count = if (state.connectionState == ChatConnectionState.CONNECTED) 2 else 1
-            state.copy(onlineUsersCount = count)
+            state.copy(onlineUsersCount = 2)
         }
     }
 
     fun startMatching() {
         partnerInteractionJob?.cancel()
+        matchingJob?.cancel()
         _uiState.update {
             it.copy(
                 connectionState = ChatConnectionState.SEARCHING,
@@ -115,11 +117,21 @@ class VideoChatViewModel : ViewModel() {
                 isPartnerTyping = false,
                 chatMessages = emptyList(),
                 unreadMessageCount = 0,
-                onlineUsersCount = 1
+                onlineUsersCount = 2
             )
         }
-        // "and when slide then dont show fake show another user and dont find then show finding .."
-        // We STAY in SEARCHING state (finding real users) instead of immediately showing a fake user!
+
+        matchingJob = viewModelScope.launch {
+            // "slide garda user dekhauna 2 ota user active huda panoidekha xaina"
+            // Snappy radar pulse for 600ms, then immediately connect to active partner
+            delay(600)
+            connectToNewPartner()
+        }
+    }
+
+    fun connectImmediately() {
+        matchingJob?.cancel()
+        connectToNewPartner()
     }
 
     fun nextPartner() {
@@ -127,26 +139,12 @@ class VideoChatViewModel : ViewModel() {
     }
 
     fun connectToDemoPartner() {
-        partnerInteractionJob?.cancel()
-        _uiState.update {
-            it.copy(
-                connectionState = ChatConnectionState.SEARCHING,
-                currentPartner = null,
-                partnerSpeechBubble = null,
-                isVoiceSpeaking = false,
-                isPartnerTyping = false,
-                chatMessages = emptyList(),
-                unreadMessageCount = 0
-            )
-        }
-        viewModelScope.launch {
-            delay(1200)
-            connectToNewPartner()
-        }
+        connectImmediately()
     }
 
     fun stopChat() {
         partnerInteractionJob?.cancel()
+        matchingJob?.cancel()
         _uiState.update {
             it.copy(
                 connectionState = ChatConnectionState.IDLE,
@@ -157,7 +155,7 @@ class VideoChatViewModel : ViewModel() {
                 chatMessages = emptyList(),
                 unreadMessageCount = 0,
                 isKeyboardChatOpen = false,
-                onlineUsersCount = 1
+                onlineUsersCount = 2
             )
         }
     }

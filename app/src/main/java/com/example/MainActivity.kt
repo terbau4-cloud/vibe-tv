@@ -12,7 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.audio.VoiceConversationManager
-import com.example.ui.screens.GoogleSignInScreen
+import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.MainChatScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.viewmodel.VideoChatViewModel
@@ -41,13 +41,13 @@ class MainActivity : ComponentActivity() {
                         .systemBarsPadding()
                 ) { innerPadding ->
                     if (!uiState.isUserSignedIn) {
-                        // "when open app then show continue with google option no register or login option"
-                        GoogleSignInScreen(
-                            isSigningIn = uiState.isSigningInWithGoogle,
-                            onContinueWithGoogle = {
-                                viewModel.signInWithGoogle(
-                                    name = "Google User",
-                                    email = "mandipmahato717@gmail.com"
+                        // "continue with google hatau ani login and register page hala yesto bala"
+                        AuthScreen(
+                            onAuthSuccess = { name, email, gender ->
+                                viewModel.authenticateUser(
+                                    name = name,
+                                    email = email,
+                                    gender = gender
                                 )
                             },
                             modifier = Modifier.fillMaxSize()

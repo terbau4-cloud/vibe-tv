@@ -137,14 +137,16 @@ fun MainChatScreen(
                     .pointerInput(uiState.connectionState) {
                         detectHorizontalDragGestures { _, dragAmount ->
                             if (dragAmount < -20f) {
-                                // Left slide: start matching or find next partner (stays in searching, never finishes app)
+                                // Left slide: start matching or find next partner
                                 if (uiState.connectionState == ChatConnectionState.IDLE) {
                                     viewModel.startMatching()
                                 } else if (uiState.connectionState == ChatConnectionState.CONNECTED) {
                                     viewModel.nextPartner()
+                                } else if (uiState.connectionState == ChatConnectionState.SEARCHING) {
+                                    viewModel.connectImmediately()
                                 }
                             } else if (dragAmount > 20f) {
-                                // Right slide: "ani mathi right tira slide garda feri suru kai aaos"
+                                // Right slide: return back to start screen
                                 viewModel.stopChat()
                             }
                         }
@@ -358,7 +360,8 @@ fun MainChatScreen(
                             selectedGender = uiState.selectedGender,
                             onCancel = { viewModel.stopChat() },
                             onOpenCountryModal = { viewModel.setShowCountrySheet(true) },
-                            onConnectDemo = { viewModel.connectToDemoPartner() }
+                            onConnectDemo = { viewModel.connectToDemoPartner() },
+                            onConnectImmediate = { viewModel.connectImmediately() }
                         )
                     }
 
@@ -376,7 +379,8 @@ fun MainChatScreen(
                                 onResetCountryFilter = { viewModel.resetCountryFilter() },
                                 onSendReaction = { viewModel.sendEmojiReaction(it) },
                                 onSkip = { viewModel.nextPartner() },
-                                onReport = { viewModel.setShowReportDialog(true) }
+                                onReport = { viewModel.setShowReportDialog(true) },
+                                onBackToStart = { viewModel.stopChat() }
                             )
                         }
                     }
@@ -413,6 +417,21 @@ fun MainChatScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
+                    .pointerInput(uiState.connectionState) {
+                        detectHorizontalDragGestures { _, dragAmount ->
+                            if (dragAmount < -20f) {
+                                if (uiState.connectionState == ChatConnectionState.IDLE) {
+                                    viewModel.startMatching()
+                                } else if (uiState.connectionState == ChatConnectionState.CONNECTED) {
+                                    viewModel.nextPartner()
+                                } else if (uiState.connectionState == ChatConnectionState.SEARCHING) {
+                                    viewModel.connectImmediately()
+                                }
+                            } else if (dragAmount > 20f) {
+                                viewModel.stopChat()
+                            }
+                        }
+                    }
                     .testTag("own_camera_container")
             ) {
                 // Live camera preview (shows pure solid black when camera is not open, off, or on PC without camera)

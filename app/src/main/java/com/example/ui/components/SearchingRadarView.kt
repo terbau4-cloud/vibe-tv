@@ -42,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.Country
 import com.example.model.Gender
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 
 @Composable
 fun SearchingRadarView(
@@ -50,6 +52,7 @@ fun SearchingRadarView(
     onCancel: () -> Unit,
     onOpenCountryModal: () -> Unit = {},
     onConnectDemo: (() -> Unit)? = null,
+    onConnectImmediate: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "radar")
@@ -75,7 +78,17 @@ fun SearchingRadarView(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF191A22)),
+            .background(Color(0xFF191A22))
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures { _, dragAmount ->
+                    if (dragAmount < -20f) {
+                        // Sliding left immediately connects to the user
+                        (onConnectImmediate ?: onConnectDemo)?.invoke()
+                    } else if (dragAmount > 20f) {
+                        onCancel()
+                    }
+                }
+            },
         contentAlignment = Alignment.Center
     ) {
         // Radar waves canvas
@@ -149,7 +162,7 @@ fun SearchingRadarView(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "1 User online (You) • Waiting for partner to join",
+                    text = "2 Users Online • Connecting...",
                     color = Color(0xFF00E676),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold
@@ -196,15 +209,13 @@ fun SearchingRadarView(
                     Text("Stop", color = Color.LightGray, fontSize = 13.sp)
                 }
 
-                if (onConnectDemo != null) {
-                    Button(
-                        onClick = onConnectDemo,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF473A)),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF473A))
-                    ) {
-                        Text("Connect Demo", color = Color(0xFFFF8A80), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
+                Button(
+                    onClick = { (onConnectImmediate ?: onConnectDemo)?.invoke() },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF473A)),
+                    modifier = Modifier.testTag("connect_now_button")
+                ) {
+                    Text("Connect Now • Slide Left", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
