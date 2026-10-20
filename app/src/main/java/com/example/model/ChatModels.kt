@@ -47,15 +47,16 @@ enum class ChatConnectionState {
 data class PartnerProfile(
     val id: String,
     val name: String,
-    val age: Int,
-    val country: Country,
-    val bio: String,
-    val avatarBgColor: Long,
-    val avatarEmoji: String,
-    val videoTone: String,
-    val greetings: List<String>,
-    val chatReplies: Map<String, String>,
-    val photoUrl: String = ""
+    val age: Int = 22,
+    val country: Country = Country("NP", "Nepal", "🇳🇵", "Asia"),
+    val bio: String = "Active Real Device User",
+    val avatarBgColor: Long = 0xFF880E4F,
+    val avatarEmoji: String = "✨",
+    val videoTone: String = "neon",
+    val greetings: List<String> = listOf("Hello! Connected from my mobile phone!"),
+    val chatReplies: Map<String, String> = emptyMap(),
+    val photoUrl: String = "",
+    val isRealDevice: Boolean = true
 )
 
 data class ChatMessage(

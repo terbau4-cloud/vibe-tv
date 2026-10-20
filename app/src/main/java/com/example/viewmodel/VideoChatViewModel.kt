@@ -9,6 +9,7 @@ import com.example.model.Country
 import com.example.model.FloatingReaction
 import com.example.model.Gender
 import com.example.model.PartnerProfile
+import com.example.network.RealtimeMatchmaker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -96,18 +97,83 @@ class VideoChatViewModel : ViewModel() {
     }
 
     init {
-        updateOnlineCount()
-    }
+        // Real-time matchmaking callbacks connecting physical phones across the internet
+        RealtimeMatchmaker.onMatchedCallback = { partner, _ ->
+            viewModelScope.launch {
+                _uiState.update {
+                    it.copy(
+                        connectionState = ChatConnectionState.CONNECTED,
+                        currentPartner = partner,
+                        partnerSpeechBubble = "Connected with ${partner.name}! 👋",
+                        isVoiceSpeaking = false,
+                        onlineUsersCount = 2,
+                        chatMessages = listOf(
+                            ChatMessage(
+                                id = "conn_${System.currentTimeMillis()}",
+                                senderIsMe = false,
+                                senderName = partner.name,
+                                text = "Real Mobile Device Connected! 🟢"
+                            )
+                        ),
+                        unreadMessageCount = 1
+                    )
+                }
+            }
+        }
 
-    private fun updateOnlineCount() {
-        _uiState.update { state ->
-            state.copy(onlineUsersCount = 2)
+        RealtimeMatchmaker.onChatMessageCallback = { chatMsg ->
+            viewModelScope.launch {
+                _uiState.update {
+                    it.copy(
+                        chatMessages = it.chatMessages + chatMsg,
+                        partnerSpeechBubble = chatMsg.text,
+                        unreadMessageCount = if (it.isKeyboardChatOpen || it.showChatDrawer) 0 else (it.unreadMessageCount + 1)
+                    )
+                }
+            }
+        }
+
+        RealtimeMatchmaker.onPartnerTypingCallback = { isTyping ->
+            viewModelScope.launch {
+                _uiState.update { it.copy(isPartnerTyping = isTyping) }
+            }
+        }
+
+        RealtimeMatchmaker.onReactionCallback = { emoji ->
+            viewModelScope.launch {
+                sendEmojiReactionLocally(emoji)
+            }
+        }
+
+        RealtimeMatchmaker.onPartnerLeftCallback = {
+            viewModelScope.launch {
+                _uiState.update {
+                    it.copy(
+                        bannerNotice = "Partner left the room.",
+                        connectionState = ChatConnectionState.SEARCHING,
+                        currentPartner = null,
+                        partnerSpeechBubble = null,
+                        isVoiceSpeaking = false,
+                        isPartnerTyping = false,
+                        chatMessages = emptyList(),
+                        onlineUsersCount = 1
+                    )
+                }
+                val state = _uiState.value
+                RealtimeMatchmaker.startSearching(
+                    userName = state.userName ?: "Real User",
+                    gender = state.selectedGender,
+                    country = state.selectedCountry
+                )
+            }
         }
     }
 
     fun startMatching() {
         partnerInteractionJob?.cancel()
         matchingJob?.cancel()
+        RealtimeMatchmaker.leaveCurrentRoom()
+
         _uiState.update {
             it.copy(
                 connectionState = ChatConnectionState.SEARCHING,
@@ -117,34 +183,27 @@ class VideoChatViewModel : ViewModel() {
                 isPartnerTyping = false,
                 chatMessages = emptyList(),
                 unreadMessageCount = 0,
-                onlineUsersCount = 2
+                onlineUsersCount = 1
             )
         }
 
-        matchingJob = viewModelScope.launch {
-            // "slide garda user dekhauna 2 ota user active huda panoidekha xaina"
-            // Snappy radar pulse for 600ms, then immediately connect to active partner
-            delay(600)
-            connectToNewPartner()
-        }
-    }
-
-    fun connectImmediately() {
-        matchingJob?.cancel()
-        connectToNewPartner()
+        val state = _uiState.value
+        RealtimeMatchmaker.startSearching(
+            userName = state.userName ?: "Real User",
+            gender = state.selectedGender,
+            country = state.selectedCountry
+        )
     }
 
     fun nextPartner() {
         startMatching()
     }
 
-    fun connectToDemoPartner() {
-        connectImmediately()
-    }
-
     fun stopChat() {
         partnerInteractionJob?.cancel()
         matchingJob?.cancel()
+        RealtimeMatchmaker.leaveCurrentRoom()
+        RealtimeMatchmaker.stopSearching()
         _uiState.update {
             it.copy(
                 connectionState = ChatConnectionState.IDLE,
@@ -155,85 +214,18 @@ class VideoChatViewModel : ViewModel() {
                 chatMessages = emptyList(),
                 unreadMessageCount = 0,
                 isKeyboardChatOpen = false,
-                onlineUsersCount = 2
+                onlineUsersCount = 1
             )
-        }
-    }
-
-    private fun connectToNewPartner() {
-        val currentState = _uiState.value
-        val partner = PartnerRepository.samplePartners
-            .filter { it.id !in currentState.blockedUserIds }
-            .filter {
-                currentState.selectedCountry.code == "ALL" || it.country.code == currentState.selectedCountry.code
-            }
-            .ifEmpty {
-                PartnerRepository.samplePartners.filter { it.id !in currentState.blockedUserIds }
-            }
-            .filter { it.id != currentState.currentPartner?.id }
-            .let { list ->
-                if (list.isNotEmpty()) list[Random.nextInt(list.size)]
-                else PartnerRepository.samplePartners[0]
-            }
-
-        val greeting = partner.greetings[Random.nextInt(partner.greetings.size)]
-
-        _uiState.update {
-            it.copy(
-                connectionState = ChatConnectionState.CONNECTED,
-                currentPartner = partner,
-                partnerSpeechBubble = greeting,
-                isVoiceSpeaking = !it.isVoiceMuted,
-                onlineUsersCount = 2
-            )
-        }
-
-        // Voice audio: speak greeting out loud!
-        if (!currentState.isVoiceMuted) {
-            onSpeakRequested?.invoke(greeting, partner.country.code)
-        }
-
-        // Add greeting to chat as well
-        val greetingMessage = ChatMessage(
-            id = "msg_${System.currentTimeMillis()}",
-            senderIsMe = false,
-            senderName = partner.name,
-            text = greeting
-        )
-
-        _uiState.update {
-            it.copy(
-                chatMessages = listOf(greetingMessage),
-                unreadMessageCount = if (it.isKeyboardChatOpen || it.showChatDrawer) 0 else 1
-            )
-        }
-
-        startPartnerBehavior(partner)
-    }
-
-    private fun startPartnerBehavior(partner: PartnerProfile) {
-        partnerInteractionJob?.cancel()
-        partnerInteractionJob = viewModelScope.launch {
-            // Stop speaking pulse after speech duration
-            delay(3200)
-            _uiState.update { it.copy(isVoiceSpeaking = false) }
-
-            // Auto hide speech bubble after 5.5 seconds to keep view clean
-            delay(2500)
-            _uiState.update { it.copy(partnerSpeechBubble = null) }
-
-            // Occasional partner reaction after some time
-            delay(4000)
-            if (_uiState.value.connectionState == ChatConnectionState.CONNECTED) {
-                val emojis = listOf("👋", "✨", "😊", "✌️", "🔥")
-                triggerReaction(emojis.random(), startXRatio = 0.5f + (Random.nextFloat() * 0.3f))
-            }
         }
     }
 
     fun sendEmojiReaction(emoji: String) {
-        // "ani emoji ma click garda purai screen ma aaos ekxin ko lagi"
-        // Trigger full screen reaction animation
+        sendEmojiReactionLocally(emoji)
+        // Broadcast to real partner phone so it explodes on their screen too!
+        RealtimeMatchmaker.sendReaction(emoji)
+    }
+
+    private fun sendEmojiReactionLocally(emoji: String) {
         fullScreenEmojiJob?.cancel()
         _uiState.update { it.copy(fullScreenEmoji = emoji) }
         fullScreenEmojiJob = viewModelScope.launch {
@@ -242,8 +234,6 @@ class VideoChatViewModel : ViewModel() {
         }
 
         val baseStartX = 0.25f + (Random.nextFloat() * 0.5f)
-
-        // Spawn a burst of 5-8 floating particles for a rich lively effect on the video stream!
         val burstCount = Random.nextInt(5, 9)
         for (i in 0 until burstCount) {
             val offsetX = (Random.nextFloat() * 0.28f) - 0.14f
@@ -256,31 +246,6 @@ class VideoChatViewModel : ViewModel() {
                 sizeSp = size,
                 rotationAngle = rotation
             )
-        }
-
-        if (_uiState.value.connectionState == ChatConnectionState.CONNECTED) {
-            viewModelScope.launch {
-                delay(650)
-                val partnerEmoji = when (emoji) {
-                    "😂" -> "🤣"
-                    "❤️" -> "🥰"
-                    "👍" -> "🙌"
-                    "🔥" -> "💥"
-                    "🎉" -> "🥳"
-                    "⭐" -> "✨"
-                    else -> emoji
-                }
-                val partnerBaseX = 0.35f + (Random.nextFloat() * 0.3f)
-                for (j in 0 until 3) {
-                    val pX = (partnerBaseX + (Random.nextFloat() * 0.14f - 0.07f)).coerceIn(0.15f, 0.85f)
-                    triggerReaction(
-                        emoji = partnerEmoji,
-                        startXRatio = pX,
-                        sizeSp = Random.nextInt(24, 38),
-                        rotationAngle = Random.nextFloat() * 30f - 15f
-                    )
-                }
-            }
         }
     }
 
@@ -311,6 +276,7 @@ class VideoChatViewModel : ViewModel() {
     }
 
     fun sendChatMessage(text: String) {
+        val myName = _uiState.value.userName ?: "You"
         val userMsg = ChatMessage(
             id = "user_${System.currentTimeMillis()}",
             senderIsMe = true,
@@ -322,45 +288,12 @@ class VideoChatViewModel : ViewModel() {
             it.copy(chatMessages = it.chatMessages + userMsg)
         }
 
-        val partner = _uiState.value.currentPartner ?: return
+        // Send to real partner device
+        RealtimeMatchmaker.sendChatMessage(text, myName)
+    }
 
-        // Partner speaks back in response!
-        viewModelScope.launch {
-            _uiState.update { it.copy(isPartnerTyping = true) }
-            delay(1000 + (Random.nextLong(300, 800)))
-
-            val replyText = partner.chatReplies.entries
-                .firstOrNull { (k, _) -> text.contains(k, ignoreCase = true) }?.value
-                ?: partner.chatReplies["default"]
-                ?: "Nice! Having fun chatting with you!"
-
-            val partnerMsg = ChatMessage(
-                id = "partner_${System.currentTimeMillis()}",
-                senderIsMe = false,
-                senderName = partner.name,
-                text = replyText
-            )
-
-            _uiState.update {
-                it.copy(
-                    isPartnerTyping = false,
-                    partnerSpeechBubble = replyText,
-                    isVoiceSpeaking = !it.isVoiceMuted,
-                    chatMessages = it.chatMessages + partnerMsg,
-                    unreadMessageCount = if (it.isKeyboardChatOpen || it.showChatDrawer) 0 else (it.unreadMessageCount + 1)
-                )
-            }
-
-            if (!_uiState.value.isVoiceMuted) {
-                onSpeakRequested?.invoke(replyText, partner.country.code)
-            }
-
-            delay(3000)
-            _uiState.update { it.copy(isVoiceSpeaking = false) }
-
-            delay(3000)
-            _uiState.update { it.copy(partnerSpeechBubble = null) }
-        }
+    fun notifyTyping(isTyping: Boolean) {
+        RealtimeMatchmaker.sendTyping(isTyping)
     }
 
     fun talkToPartner(phrase: String) {
