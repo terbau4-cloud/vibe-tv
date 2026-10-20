@@ -11,6 +11,7 @@ import com.example.model.FloatingReaction
 import com.example.model.Gender
 import com.example.model.PartnerProfile
 import com.example.network.RealtimeMatchmaker
+import com.example.network.WebRtcManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -89,24 +90,25 @@ class VideoChatViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         // Real-time matchmaking callbacks connecting physical phones across the internet
-        RealtimeMatchmaker.onMatchedCallback = { partner, _ ->
+        RealtimeMatchmaker.onMatchedCallback = { partner, roomId ->
             viewModelScope.launch {
+                val isInitiator = RealtimeMatchmaker.myClientId < partner.id
+                WebRtcManager.startCall(
+                    context = application.applicationContext,
+                    roomId = roomId,
+                    isInitiator = isInitiator,
+                    myClientId = RealtimeMatchmaker.myClientId
+                )
+
                 _uiState.update {
                     it.copy(
                         connectionState = ChatConnectionState.CONNECTED,
                         currentPartner = partner,
-                        partnerSpeechBubble = "Connected with ${partner.name}! 👋",
+                        partnerSpeechBubble = null, // Removed "Connected with..." speech bubble from center
                         isVoiceSpeaking = false,
                         onlineUsersCount = 2,
-                        chatMessages = listOf(
-                            ChatMessage(
-                                id = "conn_${System.currentTimeMillis()}",
-                                senderIsMe = false,
-                                senderName = partner.name,
-                                text = "Real Mobile Device Connected! 🟢"
-                            )
-                        ),
-                        unreadMessageCount = 1
+                        chatMessages = emptyList(),
+                        unreadMessageCount = 0
                     )
                 }
             }
@@ -139,6 +141,7 @@ class VideoChatViewModel(application: Application) : AndroidViewModel(applicatio
         // User requirement: automatically search for another real user when partner ends or leaves
         RealtimeMatchmaker.onPartnerLeftCallback = {
             viewModelScope.launch {
+                WebRtcManager.endCall(application.applicationContext)
                 _uiState.update {
                     it.copy(
                         bannerNotice = "Partner left. Searching for real users…",
@@ -266,6 +269,7 @@ class VideoChatViewModel(application: Application) : AndroidViewModel(applicatio
     fun stopChat() {
         partnerInteractionJob?.cancel()
         matchingJob?.cancel()
+        WebRtcManager.endCall(getApplication<Application>().applicationContext)
         RealtimeMatchmaker.leaveCurrentRoom()
         RealtimeMatchmaker.stopSearching()
         _uiState.update {
@@ -365,15 +369,21 @@ class VideoChatViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun toggleCameraPower() {
-        _uiState.update { it.copy(isCameraOn = !it.isCameraOn) }
+        val newState = !_uiState.value.isCameraOn
+        _uiState.update { it.copy(isCameraOn = newState) }
+        WebRtcManager.setCameraEnabled(newState)
     }
 
     fun toggleCameraLens() {
-        _uiState.update { it.copy(isFrontCamera = !it.isFrontCamera) }
+        val newState = !_uiState.value.isFrontCamera
+        _uiState.update { it.copy(isFrontCamera = newState) }
+        WebRtcManager.switchCamera()
     }
 
     fun toggleVoiceAudio() {
-        _uiState.update { it.copy(isVoiceMuted = !it.isVoiceMuted) }
+        val newState = !_uiState.value.isVoiceMuted
+        _uiState.update { it.copy(isVoiceMuted = newState) }
+        WebRtcManager.setMicEnabled(!newState)
     }
 
     fun toggleKeyboardChat() {
@@ -458,5 +468,6 @@ class VideoChatViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         stopChat()
+        WebRtcManager.release()
     }
 }

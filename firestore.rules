@@ -16,15 +16,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Real-time chat, signaling, and call rooms between matched physical devices
+    // Real-time chat, WebRTC signaling, and call rooms between matched physical devices
     match /rooms/{roomId} {
       allow read, write: if true;
 
-      match /messages/{messageId} {
-        allow read, write: if true;
-      }
-
-      match /signals/{signalId} {
+      match /{allSubcollections=**} {
         allow read, write: if true;
       }
     }

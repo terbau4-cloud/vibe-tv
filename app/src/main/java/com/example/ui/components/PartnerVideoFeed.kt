@@ -1,47 +1,35 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.VolumeMute
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -49,20 +37,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.example.model.Country
 import com.example.model.PartnerProfile
+import com.example.network.WebRtcManager
 import kotlinx.coroutines.delay
+import org.webrtc.SurfaceViewRenderer
 
+/**
+ * Top half feed: displays the opponent's genuine live WebRTC camera stream.
+ * Center is completely clean (avatar, big name, and "Connected with" removed).
+ * Country and flag are shown at the bottom ("ali tala dekhau").
+ */
 @Composable
 fun PartnerVideoFeed(
     partner: PartnerProfile,
@@ -88,42 +80,13 @@ fun PartnerVideoFeed(
         }
     }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "webcam_motion")
-    val breathingOffset by infiniteTransition.animateFloat(
-        initialValue = -3f,
-        targetValue = 3f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "sway"
-    )
-
-    val speakingPulse by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.15f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "speakingPulse"
-    )
-
-    val backgroundGradient = remember(partner.videoTone) {
-        when (partner.videoTone) {
-            "neon" -> Brush.verticalGradient(listOf(Color(0xFF2A164D), Color(0xFF140D26)))
-            "sunset" -> Brush.verticalGradient(listOf(Color(0xFF4A2810), Color(0xFF1C0F08)))
-            "warm" -> Brush.verticalGradient(listOf(Color(0xFF3E2723), Color(0xFF1A120B)))
-            "cozy" -> Brush.verticalGradient(listOf(Color(0xFF1A2A3A), Color(0xFF0D161F)))
-            "soft" -> Brush.verticalGradient(listOf(Color(0xFF421D37), Color(0xFF1C0A17)))
-            else -> Brush.verticalGradient(listOf(Color(0xFF1E242B), Color(0xFF0F1216)))
-        }
-    }
+    val remoteVideoTrack by WebRtcManager.remoteVideoTrack.collectAsState()
+    val isRemoteStreaming by WebRtcManager.isRemoteCameraStreaming.collectAsState()
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(backgroundGradient)
+            .background(Color.Black)
             .testTag("partner_video_feed")
             .pointerInput(partner.id) {
                 detectHorizontalDragGestures { _, dragAmount ->
@@ -135,126 +98,29 @@ fun PartnerVideoFeed(
                 }
             }
     ) {
-        // Room lighting backdrop & webcam simulation
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val width = size.width
-            val height = size.height
-
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color(partner.avatarBgColor).copy(alpha = 0.35f),
-                        Color.Transparent
-                    ),
-                    center = Offset(width * 0.75f, height * 0.25f),
-                    radius = width * 0.65f
-                )
-            )
-
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(Color(0x33FFFFFF), Color.Transparent),
-                    center = Offset(width * 0.25f, height * 0.8f),
-                    radius = width * 0.5f
-                )
-            )
-
-            if (isVoiceSpeaking) {
-                drawCircle(
-                    color = Color(0xFFFF473A).copy(alpha = 0.3f),
-                    radius = 90.dp.toPx() * speakingPulse,
-                    center = Offset(width / 2f, height / 2f - 20.dp.toPx()),
-                    style = Stroke(width = 3.dp.toPx())
-                )
-            }
-        }
-
-        // Live partner avatar presentation
-        Column(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .padding(bottom = 12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Box(
+        // Opponent's Real Live Camera View
+        if (remoteVideoTrack != null && isRemoteStreaming) {
+            AndroidView(
                 modifier = Modifier
-                    .size(116.dp)
-                    .clip(CircleShape)
-                    .background(Color(partner.avatarBgColor))
-                    .border(
-                        width = if (isVoiceSpeaking) 3.dp else 1.dp,
-                        color = if (isVoiceSpeaking) Color(0xFFFF473A) else Color(0x44FFFFFF),
-                        shape = CircleShape
-                    )
-                    .padding(4.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(106.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x22FFFFFF)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = partner.avatarEmoji,
-                        fontSize = 50.sp,
-                        modifier = Modifier
-                            .offset(y = breathingOffset.dp)
-                            .scale(if (isVoiceSpeaking) speakingPulse else 1f)
-                    )
-                }
-
-                if (isVoiceSpeaking) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFFF473A)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.RecordVoiceOver,
-                            contentDescription = "Speaking",
-                            tint = Color.White,
-                            modifier = Modifier.size(16.dp)
-                        )
+                    .fillMaxSize()
+                    .testTag("remote_partner_video_renderer"),
+                factory = { ctx ->
+                    SurfaceViewRenderer(ctx).apply {
+                        WebRtcManager.attachRemoteRenderer(this)
                     }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Partner name, age & country badge
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+            )
+        } else {
+            // When camera is off or connecting, show pure black
+            Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xAA000000))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = partner.country.flag,
-                    fontSize = 16.sp
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "${partner.name}, ${partner.age}",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "• ${partner.country.name}",
-                    color = Color(0xFFD0D0D8),
-                    fontSize = 12.sp
-                )
-            }
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .testTag("remote_partner_black_screen")
+            )
         }
 
-        // Top bar overlay (Connection status, duration, ACTIVE FILTER BADGE, audio toggle, report button)
+        // Top bar overlay (call duration, HD badge, active filter pill, voice audio, report)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -275,7 +141,7 @@ fun PartnerVideoFeed(
                     modifier = Modifier
                         .size(8.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF00E676))
+                        .background(if (isRemoteStreaming) Color(0xFF00E676) else Color(0xFFFFB300))
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 val minutes = callSeconds / 60
@@ -290,12 +156,12 @@ fun PartnerVideoFeed(
                 Icon(
                     Icons.Default.SignalCellularAlt,
                     contentDescription = "HD Quality",
-                    tint = Color(0xFF00E676),
+                    tint = if (isRemoteStreaming) Color(0xFF00E676) else Color(0xFFFFB300),
                     modifier = Modifier.size(14.dp)
                 )
             }
 
-            // ACTIVE COUNTRY FILTER BADGE IN THE VIDEO STREAM!
+            // ACTIVE COUNTRY FILTER BADGE IN THE VIDEO STREAM
             ActiveFilterBadge(
                 selectedCountry = selectedCountry,
                 onOpenFilterModal = onOpenCountryModal,
@@ -341,14 +207,32 @@ fun PartnerVideoFeed(
             }
         }
 
-        // Live speech bubble or typing indicator
+        // ==================== BOTTOM: COUNTRY SHOWN DOWN HERE ("ali tala dekhau") ====================
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 14.dp, bottom = 14.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0x99000000))
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = "${partner.country.flag} ${partner.country.name}",
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp
+            )
+        }
+
+        // Live speech bubble or typing indicator (shown above the country badge if active)
         AnimatedVisibility(
-            visible = speechBubble != null || isTyping,
+            visible = !speechBubble.isNullOrBlank() || isTyping,
             enter = fadeIn() + slideInVertically { it / 2 },
             exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 14.dp, bottom = 14.dp, end = 120.dp)
+                .padding(start = 14.dp, bottom = 48.dp, end = 120.dp)
         ) {
             Box(
                 modifier = Modifier
