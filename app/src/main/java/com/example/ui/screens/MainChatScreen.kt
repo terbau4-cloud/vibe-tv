@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -113,6 +116,19 @@ fun MainChatScreen(
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
 
+    val permissionsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ -> }
+
+    LaunchedEffect(Unit) {
+        permissionsLauncher.launch(
+            arrayOf(
+                Manifest.permission.CAMERA,
+                Manifest.permission.RECORD_AUDIO
+            )
+        )
+    }
+
     // Auto-focus and open keyboard when keyboard chat mode is triggered
     LaunchedEffect(uiState.isKeyboardChatOpen) {
         if (uiState.isKeyboardChatOpen) {
@@ -137,13 +153,13 @@ fun MainChatScreen(
                     .pointerInput(uiState.connectionState) {
                         detectHorizontalDragGestures { _, dragAmount ->
                             if (dragAmount < -20f) {
-                                // Left slide: start matching or find next partner
+                                // Left slide: start matching or find next real partner
                                 if (uiState.connectionState == ChatConnectionState.IDLE) {
                                     viewModel.startMatching()
                                 } else if (uiState.connectionState == ChatConnectionState.CONNECTED) {
                                     viewModel.nextPartner()
                                 } else if (uiState.connectionState == ChatConnectionState.SEARCHING) {
-                                    viewModel.connectImmediately()
+                                    viewModel.startMatching()
                                 }
                             } else if (dragAmount > 20f) {
                                 // Right slide: return back to start screen
@@ -358,10 +374,9 @@ fun MainChatScreen(
                         SearchingRadarView(
                             selectedCountry = uiState.selectedCountry,
                             selectedGender = uiState.selectedGender,
+                            onlineUsersCount = uiState.onlineUsersCount,
                             onCancel = { viewModel.stopChat() },
-                            onOpenCountryModal = { viewModel.setShowCountrySheet(true) },
-                            onConnectDemo = { viewModel.connectToDemoPartner() },
-                            onConnectImmediate = { viewModel.connectImmediately() }
+                            onOpenCountryModal = { viewModel.setShowCountrySheet(true) }
                         )
                     }
 
@@ -387,16 +402,9 @@ fun MainChatScreen(
 
                     ChatConnectionState.ENDED -> {
                         TvStaticBackground()
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Button(
-                                onClick = { viewModel.startMatching() },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF473A))
-                            ) {
-                                Text("Find Next Partner")
-                            }
+                        // Automatically search for another real user without requiring button or closing app
+                        LaunchedEffect(Unit) {
+                            viewModel.startMatching()
                         }
                     }
                 }
@@ -425,7 +433,7 @@ fun MainChatScreen(
                                 } else if (uiState.connectionState == ChatConnectionState.CONNECTED) {
                                     viewModel.nextPartner()
                                 } else if (uiState.connectionState == ChatConnectionState.SEARCHING) {
-                                    viewModel.connectImmediately()
+                                    viewModel.startMatching()
                                 }
                             } else if (dragAmount > 20f) {
                                 viewModel.stopChat()

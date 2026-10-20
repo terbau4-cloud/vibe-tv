@@ -1,0 +1,32 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // User profiles - allow read for matching and write for registration/updates
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Username lookup mapping for cross-device authentication
+    match /usernames/{username} {
+      allow read, write: if true;
+    }
+
+    // Real-time matchmaking queue across physical devices
+    match /matchmaking_queue/{userId} {
+      allow read, write: if true;
+    }
+
+    // Real-time chat, signaling, and call rooms between matched physical devices
+    match /rooms/{roomId} {
+      allow read, write: if true;
+
+      match /messages/{messageId} {
+        allow read, write: if true;
+      }
+
+      match /signals/{signalId} {
+        allow read, write: if true;
+      }
+    }
+  }
+}

@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,23 +37,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.Country
 import com.example.model.Gender
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.ui.input.pointer.pointerInput
 
 @Composable
 fun SearchingRadarView(
     selectedCountry: Country,
     selectedGender: Gender,
+    onlineUsersCount: Int = 1,
     onCancel: () -> Unit,
     onOpenCountryModal: () -> Unit = {},
-    onConnectDemo: (() -> Unit)? = null,
-    onConnectImmediate: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "radar")
@@ -81,10 +80,8 @@ fun SearchingRadarView(
             .background(Color(0xFF191A22))
             .pointerInput(Unit) {
                 detectHorizontalDragGestures { _, dragAmount ->
-                    if (dragAmount < -20f) {
-                        // Sliding left immediately connects to the user
-                        (onConnectImmediate ?: onConnectDemo)?.invoke()
-                    } else if (dragAmount > 20f) {
+                    if (dragAmount > 20f) {
+                        // Right slide returns to idle screen
                         onCancel()
                     }
                 }
@@ -121,7 +118,7 @@ fun SearchingRadarView(
             ) {
                 Icon(
                     imageVector = Icons.Default.TravelExplore,
-                    contentDescription = "Searching",
+                    contentDescription = "Searching for real users",
                     tint = Color.White,
                     modifier = Modifier.size(38.dp)
                 )
@@ -129,47 +126,52 @@ fun SearchingRadarView(
 
             Spacer(modifier = Modifier.height(14.dp))
 
+            // User requirement: "display 'Searching for real users…' and never generate a fake opponent"
             Text(
-                text = "Finding...",
+                text = "Searching for real users…",
                 color = Color.White,
-                fontSize = 20.sp,
+                fontSize = 19.sp,
                 fontWeight = FontWeight.Bold
             )
 
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "Looking for active users...",
+                text = if (onlineUsersCount <= 1) "Waiting for partner to join..." else "Real partner found! Connecting...",
                 color = Color(0xFFB0B0C0),
                 fontSize = 13.sp
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // Real status banner
+            // Real status banner showing genuine connected queue status
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
                     .background(Color(0x55000000))
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .padding(horizontal = 12.dp, vertical = 5.dp)
             ) {
                 Box(
                     modifier = Modifier
                         .size(8.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF00E676))
+                        .background(if (onlineUsersCount > 1) Color(0xFF00E676) else Color(0xFFFFB300))
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "2 Users Online • Connecting...",
-                    color = Color(0xFF00E676),
-                    fontSize = 11.sp,
+                    text = if (onlineUsersCount <= 1) {
+                        "1 Real User in Queue (You) • Ready"
+                    } else {
+                        "$onlineUsersCount Real Devices Online • Connecting"
+                    },
+                    color = if (onlineUsersCount > 1) Color(0xFF00E676) else Color(0xFFFFB300),
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Active Filter Pill in Radar
             Row(
@@ -195,28 +197,17 @@ fun SearchingRadarView(
                 )
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(
-                    onClick = onCancel,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2C2D38)),
-                    modifier = Modifier.testTag("cancel_search_button")
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color.LightGray, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Stop", color = Color.LightGray, fontSize = 13.sp)
-                }
-
-                Button(
-                    onClick = { (onConnectImmediate ?: onConnectDemo)?.invoke() },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF473A)),
-                    modifier = Modifier.testTag("connect_now_button")
-                ) {
-                    Text("Connect Now • Slide Left", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
+            Button(
+                onClick = onCancel,
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2C2D38)),
+                modifier = Modifier.testTag("cancel_search_button")
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color.LightGray, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Stop Searching", color = Color.LightGray, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
         }
     }

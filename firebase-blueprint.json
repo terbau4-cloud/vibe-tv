@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "UserProfile": {
+      "collection": "users",
+      "fields": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "gender": { "type": "string" },
+        "isOnline": { "type": "boolean" },
+        "createdAt": { "type": "timestamp" }
+      }
+    },
+    "UsernameMapping": {
+      "collection": "usernames",
+      "fields": {
+        "email": { "type": "string" },
+        "uid": { "type": "string" }
+      }
+    },
+    "QueueEntry": {
+      "collection": "matchmaking_queue",
+      "fields": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "gender": { "type": "string" },
+        "countryCode": { "type": "string" },
+        "countryName": { "type": "string" },
+        "countryFlag": { "type": "string" },
+        "status": { "type": "string" },
+        "matchedRoomId": { "type": "string" },
+        "matchedWith": { "type": "string" },
+        "updatedAt": { "type": "timestamp" }
+      }
+    },
+    "ChatRoom": {
+      "collection": "rooms",
+      "fields": {
+        "status": { "type": "string" },
+        "initiatorId": { "type": "string" },
+        "targetId": { "type": "string" },
+        "createdAt": { "type": "timestamp" }
+      }
+    }
+  }
+}

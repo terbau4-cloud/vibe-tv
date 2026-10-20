@@ -31,17 +31,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Female
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mail
-import androidx.compose.material.icons.filled.Male
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Transgender
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -82,11 +81,13 @@ private val VibeInputBorder = Color(0xFF222638)
 
 /**
  * Authentication Screen providing exact Login ("Welcome Back")
- * and Register ("Create Your Account") pages from the user's design.
+ * and Register ("Create Your Account") with strict Firebase credential validation.
  */
 @Composable
 fun AuthScreen(
-    onAuthSuccess: (name: String, email: String, gender: Gender) -> Unit,
+    onLogin: (emailOrUsername: String, password: String, onResult: (Boolean, String?) -> Unit) -> Unit,
+    onRegister: (name: String, emailOrUsername: String, password: String, gender: Gender, onResult: (Boolean, String?) -> Unit) -> Unit,
+    onGoogleSignIn: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var isRegisterMode by remember { mutableStateOf(false) }
@@ -128,21 +129,13 @@ fun AuthScreen(
             if (inRegister) {
                 RegisterScreenContent(
                     onBackToLogin = { isRegisterMode = false },
-                    onRegisterSubmit = { name, email, gender ->
-                        onAuthSuccess(name, email, gender)
-                    }
+                    onRegisterSubmit = onRegister
                 )
             } else {
                 LoginScreenContent(
                     onGoToRegister = { isRegisterMode = true },
-                    onLoginSubmit = { email ->
-                        val name = email.substringBefore("@")
-                            .replace(".", " ")
-                            .split(" ")
-                            .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
-                            .ifBlank { "User" }
-                        onAuthSuccess(name, email, Gender.MALE)
-                    }
+                    onLoginSubmit = onLogin,
+                    onGoogleSignIn = onGoogleSignIn
                 )
             }
         }
@@ -155,13 +148,34 @@ fun AuthScreen(
 @Composable
 private fun LoginScreenContent(
     onGoToRegister: () -> Unit,
-    onLoginSubmit: (emailOrUsername: String) -> Unit
+    onLoginSubmit: (emailOrUsername: String, password: String, onResult: (Boolean, String?) -> Unit) -> Unit,
+    onGoogleSignIn: (() -> Unit)? = null
 ) {
     var emailOrUsername by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var isPasswordVisible by remember { mutableStateOf(false) }
     var rememberMe by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+
+    val handleLoginAction = {
+        val trimmedInput = emailOrUsername.trim()
+        val trimmedPass = password.trim()
+        if (trimmedInput.isBlank()) {
+            errorMessage = "Please enter your email or username."
+        } else if (trimmedPass.isBlank()) {
+            errorMessage = "Please enter your password."
+        } else {
+            isLoading = true
+            errorMessage = null
+            onLoginSubmit(trimmedInput, trimmedPass) { success, error ->
+                isLoading = false
+                if (!success) {
+                    errorMessage = error ?: "Incorrect credentials. Please try again."
+                }
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -226,14 +240,42 @@ private fun LoginScreenContent(
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Login to continue and meet new people",
+            text = "Sign in to connect with real friends",
             color = Color(0xFF9E9EB0),
             fontSize = 13.sp,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Start
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // Error message banner if credentials fail
+        if (errorMessage != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x22FF1E56))
+                    .border(1.dp, VibeRed.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ErrorOutline,
+                    contentDescription = "Error",
+                    tint = VibeRed,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = errorMessage ?: "",
+                    color = Color(0xFFFF8DA1),
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
 
         // Email or Username Input
         OutlinedTextField(
@@ -286,9 +328,7 @@ private fun LoginScreenContent(
             },
             visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = {
-                if (emailOrUsername.isNotBlank()) onLoginSubmit(emailOrUsername.trim())
-            }),
+            keyboardActions = KeyboardActions(onDone = { handleLoginAction() }),
             singleLine = true,
             shape = RoundedCornerShape(14.dp),
             colors = OutlinedTextFieldDefaults.colors(
@@ -342,8 +382,7 @@ private fun LoginScreenContent(
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.clickable {
-                    // Quick friendly reset note
-                    emailOrUsername = "mandipmahato717@gmail.com"
+                    errorMessage = "Enter your registered email to reset password."
                 }
             )
         }
@@ -352,10 +391,8 @@ private fun LoginScreenContent(
 
         // Big Red Gradient Login Button
         Button(
-            onClick = {
-                val input = emailOrUsername.ifBlank { "mandipmahato717@gmail.com" }
-                onLoginSubmit(input.trim())
-            },
+            onClick = { handleLoginAction() },
+            enabled = !isLoading,
             shape = RoundedCornerShape(26.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
             modifier = Modifier
@@ -368,24 +405,50 @@ private fun LoginScreenContent(
                 .shadow(12.dp, RoundedCornerShape(26.dp), spotColor = VibeRed)
                 .testTag("submit_login_button")
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Login",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp)
-                )
+            if (isLoading) {
+                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
+                Spacer(modifier = Modifier.width(10.dp))
+                Text("Authenticating...", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Login",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(22.dp))
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Optional Google Sign-In fallback
+        if (onGoogleSignIn != null) {
+            Button(
+                onClick = onGoogleSignIn,
+                shape = RoundedCornerShape(26.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E2130)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("google_signin_button")
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("G", fontWeight = FontWeight.Black, fontSize = 16.sp, color = Color(0xFF4285F4))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Continue with Google", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+            Spacer(modifier = Modifier.height(18.dp))
+        }
 
         // "———— OR ————" Divider
         Row(
@@ -404,7 +467,7 @@ private fun LoginScreenContent(
             HorizontalDivider(modifier = Modifier.weight(1f), color = Color(0xFF282B3C), thickness = 1.dp)
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(18.dp))
 
         // Switch to Register
         Row(
@@ -436,13 +499,38 @@ private fun LoginScreenContent(
 @Composable
 private fun RegisterScreenContent(
     onBackToLogin: () -> Unit,
-    onRegisterSubmit: (fullName: String, email: String, gender: Gender) -> Unit
+    onRegisterSubmit: (name: String, emailOrUsername: String, password: String, gender: Gender, onResult: (Boolean, String?) -> Unit) -> Unit
 ) {
     var fullName by remember { mutableStateOf("") }
     var emailAddress by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var isPasswordVisible by remember { mutableStateOf(false) }
     var selectedGender by remember { mutableStateOf(Gender.MALE) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+
+    val handleRegisterAction = {
+        val trimmedName = fullName.trim()
+        val trimmedEmail = emailAddress.trim()
+        val trimmedPass = password.trim()
+
+        if (trimmedName.isBlank()) {
+            errorMessage = "Please enter your full name."
+        } else if (trimmedEmail.isBlank()) {
+            errorMessage = "Please enter an email address or username."
+        } else if (trimmedPass.length < 6) {
+            errorMessage = "Password must be at least 6 characters."
+        } else {
+            isLoading = true
+            errorMessage = null
+            onRegisterSubmit(trimmedName, trimmedEmail, trimmedPass, selectedGender) { success, error ->
+                isLoading = false
+                if (!success) {
+                    errorMessage = error ?: "Registration failed. Please try again."
+                }
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -501,19 +589,50 @@ private fun RegisterScreenContent(
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Join now and start making new friends",
+            text = "Join now and connect with real users",
             color = Color(0xFF9E9EB0),
             fontSize = 13.sp,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Start
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // Error message banner if registration fails
+        if (errorMessage != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x22FF1E56))
+                    .border(1.dp, VibeRed.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ErrorOutline,
+                    contentDescription = "Error",
+                    tint = VibeRed,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = errorMessage ?: "",
+                    color = Color(0xFFFF8DA1),
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
 
         // Full Name Input
         OutlinedTextField(
             value = fullName,
-            onValueChange = { fullName = it },
+            onValueChange = {
+                fullName = it
+                errorMessage = null
+            },
             placeholder = { Text("Full Name", color = Color(0xFF70738A), fontSize = 14.sp) },
             leadingIcon = {
                 Icon(Icons.Default.Person, contentDescription = null, tint = Color(0xFF8E92A8), modifier = Modifier.size(20.dp))
@@ -538,8 +657,11 @@ private fun RegisterScreenContent(
         // Email Address Input
         OutlinedTextField(
             value = emailAddress,
-            onValueChange = { emailAddress = it },
-            placeholder = { Text("Email Address", color = Color(0xFF70738A), fontSize = 14.sp) },
+            onValueChange = {
+                emailAddress = it
+                errorMessage = null
+            },
+            placeholder = { Text("Email Address or Username", color = Color(0xFF70738A), fontSize = 14.sp) },
             leadingIcon = {
                 Icon(Icons.Default.Mail, contentDescription = null, tint = Color(0xFF8E92A8), modifier = Modifier.size(20.dp))
             },
@@ -564,8 +686,11 @@ private fun RegisterScreenContent(
         // Password Input
         OutlinedTextField(
             value = password,
-            onValueChange = { password = it },
-            placeholder = { Text("Password", color = Color(0xFF70738A), fontSize = 14.sp) },
+            onValueChange = {
+                password = it
+                errorMessage = null
+            },
+            placeholder = { Text("Password (min 6 characters)", color = Color(0xFF70738A), fontSize = 14.sp) },
             leadingIcon = {
                 Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF8E92A8), modifier = Modifier.size(20.dp))
             },
@@ -645,11 +770,8 @@ private fun RegisterScreenContent(
 
         // Big Red Gradient Register Button
         Button(
-            onClick = {
-                val finalName = fullName.ifBlank { "Mandip Mahato" }
-                val finalEmail = emailAddress.ifBlank { "mandipmahato717@gmail.com" }
-                onRegisterSubmit(finalName.trim(), finalEmail.trim(), selectedGender)
-            },
+            onClick = { handleRegisterAction() },
+            enabled = !isLoading,
             shape = RoundedCornerShape(26.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
             modifier = Modifier
@@ -662,20 +784,26 @@ private fun RegisterScreenContent(
                 .shadow(12.dp, RoundedCornerShape(26.dp), spotColor = VibeRed)
                 .testTag("submit_register_button")
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Register",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp)
-                )
+            if (isLoading) {
+                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
+                Spacer(modifier = Modifier.width(10.dp))
+                Text("Registering...", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Register",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
 
@@ -713,18 +841,18 @@ private fun GenderSelectionPill(
     label: String,
     symbol: String,
     isSelected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
 ) {
     Box(
         modifier = modifier
-            .height(44.dp)
-            .clip(RoundedCornerShape(22.dp))
+            .height(48.dp)
+            .clip(RoundedCornerShape(14.dp))
             .background(if (isSelected) VibeRed else VibeInputBg)
             .border(
-                width = 1.dp,
-                color = if (isSelected) VibeRed else VibeInputBorder,
-                shape = RoundedCornerShape(22.dp)
+                1.5.dp,
+                if (isSelected) VibeRed else VibeInputBorder,
+                RoundedCornerShape(14.dp)
             )
             .clickable { onClick() }
             .padding(horizontal = 10.dp),

@@ -5,6 +5,9 @@ import com.example.model.ChatMessage
 import com.example.model.Country
 import com.example.model.Gender
 import com.example.model.PartnerProfile
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,7 +27,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Real-time Matchmaking and Messaging engine for connecting physical devices (Phone 1 and Phone 2).
- * Operates zero-config across any cellular/WiFi networks with zero fake bots.
+ * Driven directly by Firebase Firestore for cross-device synchronization with zero fake bots.
  */
 object RealtimeMatchmaker {
 
@@ -33,11 +36,23 @@ object RealtimeMatchmaker {
     private const val NTFY_BASE_HTTP = "https://ntfy.sh"
     private const val NTFY_BASE_WS = "wss://ntfy.sh"
 
-    val myClientId: String = "dev_" + UUID.randomUUID().toString().replace("-", "").take(8)
+    var myClientId: String = try {
+        FirebaseAuth.getInstance().currentUser?.uid
+    } catch (e: Exception) {
+        null
+    } ?: ("dev_" + UUID.randomUUID().toString().replace("-", "").take(8))
+
+    private val db: FirebaseFirestore by lazy {
+        try {
+            FirebaseFirestore.getInstance("ai-studio-android-vibetv-82088118-dd78-4b2b-b4e0-b8bc7a991965")
+        } catch (e: Exception) {
+            FirebaseFirestore.getInstance()
+        }
+    }
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.SECONDS) // Keep WS open
+        .readTimeout(0, TimeUnit.SECONDS)
         .pingInterval(15, TimeUnit.SECONDS)
         .build()
 
@@ -47,6 +62,13 @@ object RealtimeMatchmaker {
     private var lobbyWebSocket: WebSocket? = null
     private var roomWebSocket: WebSocket? = null
     private var heartbeatJob: Job? = null
+    private var firestoreHeartbeatJob: Job? = null
+
+    private var queueListener: ListenerRegistration? = null
+    private var myDocListener: ListenerRegistration? = null
+    private var roomDocListener: ListenerRegistration? = null
+    private var roomMessagesListener: ListenerRegistration? = null
+    private var roomSignalsListener: ListenerRegistration? = null
 
     private var isSearching = false
     private var currentRoomId: String? = null
@@ -56,9 +78,16 @@ object RealtimeMatchmaker {
     var onPartnerTypingCallback: ((Boolean) -> Unit)? = null
     var onReactionCallback: ((String) -> Unit)? = null
     var onPartnerLeftCallback: (() -> Unit)? = null
+    var onRealOnlineCountChanged: ((Int) -> Unit)? = null
+
+    fun updateClientId(newId: String) {
+        if (newId.isNotBlank()) {
+            myClientId = newId
+        }
+    }
 
     /**
-     * Start broadcasting presence to the global matchmaking lobby.
+     * Start broadcasting presence to the Firestore matchmaking queue and global lobby.
      * When another real physical device broadcasts, both will match and connect automatically.
      */
     fun startSearching(
@@ -69,14 +98,243 @@ object RealtimeMatchmaker {
         stopSearching()
         isSearching = true
 
+        val currentAuthUid = try {
+            FirebaseAuth.getInstance().currentUser?.uid
+        } catch (e: Exception) {
+            null
+        }
+        if (currentAuthUid != null) {
+            myClientId = currentAuthUid
+        }
+
+        // 1. Register presence in Firestore matchmaking_queue
+        val myData = hashMapOf(
+            "userId" to myClientId,
+            "userName" to userName,
+            "gender" to gender.name,
+            "countryCode" to country.code,
+            "countryName" to country.name,
+            "countryFlag" to country.flag,
+            "status" to "WAITING",
+            "matchedRoomId" to null,
+            "matchedWith" to null,
+            "updatedAt" to System.currentTimeMillis()
+        )
+
+        try {
+            db.collection("matchmaking_queue").document(myClientId).set(myData)
+                .addOnSuccessListener {
+                    Log.d(TAG, "Joined matchmaking_queue in Firestore: $myClientId")
+                }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "Error writing to matchmaking_queue", e)
+                }
+
+            // Periodic Firestore heartbeat so other devices know we are genuinely live
+            firestoreHeartbeatJob = scope.launch {
+                while (isActive && isSearching) {
+                    delay(4000)
+                    if (isSearching) {
+                        try {
+                            db.collection("matchmaking_queue").document(myClientId)
+                                .update("updatedAt", System.currentTimeMillis())
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Heartbeat notice: ${e.message}")
+                        }
+                    }
+                }
+            }
+
+            // Listen to real waiting count and find real partners in queue
+            queueListener = db.collection("matchmaking_queue")
+                .whereEqualTo("status", "WAITING")
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.w(TAG, "Queue listener error: ${error.message}")
+                        return@addSnapshotListener
+                    }
+                    if (!isSearching || snapshot == null) return@addSnapshotListener
+
+                    val docs = snapshot.documents
+                    val now = System.currentTimeMillis()
+
+                    // Prune stale queue entries (older than 35s) from previously disconnected devices
+                    for (doc in docs) {
+                        val updated = doc.getLong("updatedAt") ?: 0L
+                        if (now - updated > 35_000L && doc.id != myClientId) {
+                            try {
+                                db.collection("matchmaking_queue").document(doc.id).delete()
+                            } catch (e: Exception) {}
+                        }
+                    }
+
+                    // Only consider devices active within the last 25 seconds
+                    val activeDocs = docs.filter { doc ->
+                        val updated = doc.getLong("updatedAt") ?: 0L
+                        (now - updated) < 25_000L
+                    }
+
+                    val realCount = activeDocs.size
+                    onRealOnlineCountChanged?.invoke(realCount.coerceAtLeast(1))
+
+                    // Look for another real waiting user
+                    val otherDoc = activeDocs.firstOrNull { it.id != myClientId }
+                    if (otherDoc != null && myClientId < otherDoc.id) {
+                        // Deterministic initiator: pair both users!
+                        val otherId = otherDoc.id
+                        val otherName = otherDoc.getString("userName") ?: "Real Partner"
+                        val otherGender = otherDoc.getString("gender") ?: "MALE"
+                        val otherCountryCode = otherDoc.getString("countryCode") ?: "NP"
+                        val otherCountryName = otherDoc.getString("countryName") ?: "Nepal"
+                        val otherCountryFlag = otherDoc.getString("countryFlag") ?: "🇳🇵"
+
+                        val roomId = "room_${myClientId}_${otherId}"
+                        createMatchedRoomInFirestore(
+                            roomId = roomId,
+                            initiatorId = myClientId,
+                            initiatorName = userName,
+                            initiatorGender = gender.name,
+                            initiatorCountry = country,
+                            targetId = otherId,
+                            targetName = otherName,
+                            targetGender = otherGender,
+                            targetCountryCode = otherCountryCode,
+                            targetCountryName = otherCountryName,
+                            targetCountryFlag = otherCountryFlag
+                        )
+                    }
+                }
+
+            // Listen to own document to know when matched as target
+            myDocListener = db.collection("matchmaking_queue").document(myClientId)
+                .addSnapshotListener { doc, error ->
+                    if (error != null || !isSearching || doc == null || !doc.exists()) return@addSnapshotListener
+
+                    val status = doc.getString("status")
+                    if (status == "MATCHED") {
+                        val roomId = doc.getString("matchedRoomId")
+                        val partnerId = doc.getString("matchedWith")
+                        val partnerName = doc.getString("partnerName") ?: "Real Partner"
+                        val partnerCountryCode = doc.getString("partnerCountryCode") ?: "NP"
+                        val partnerCountryName = doc.getString("partnerCountryName") ?: "Nepal"
+                        val partnerCountryFlag = doc.getString("partnerCountryFlag") ?: "🇳🇵"
+
+                        if (roomId != null && partnerId != null) {
+                            Log.d(TAG, "Matched via Firestore! Room: $roomId with $partnerId")
+                            isSearching = false
+                            stopSearchingKeepRoom()
+
+                            val partner = PartnerProfile(
+                                id = partnerId,
+                                name = partnerName,
+                                age = 23,
+                                country = Country(
+                                    code = partnerCountryCode,
+                                    name = partnerCountryName,
+                                    flag = partnerCountryFlag
+                                ),
+                                bio = "🟢 Real Online Mobile Device",
+                                avatarBgColor = 0xFF1B5E20,
+                                avatarEmoji = "📱",
+                                videoTone = "neon",
+                                greetings = listOf("Hello! Connected with you from my phone!"),
+                                isRealDevice = true
+                            )
+
+                            onMatchedCallback?.invoke(partner, roomId)
+                            joinRoom(roomId)
+                        }
+                    }
+                }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Firestore search error", e)
+        }
+
+        // 2. Auxiliary real-time WebSocket accelerator
+        startWebSocketLobby(userName, gender, country)
+    }
+
+    private fun createMatchedRoomInFirestore(
+        roomId: String,
+        initiatorId: String,
+        initiatorName: String,
+        initiatorGender: String,
+        initiatorCountry: Country,
+        targetId: String,
+        targetName: String,
+        targetGender: String,
+        targetCountryCode: String,
+        targetCountryName: String,
+        targetCountryFlag: String
+    ) {
+        val roomDoc = hashMapOf(
+            "roomId" to roomId,
+            "initiatorId" to initiatorId,
+            "initiatorName" to initiatorName,
+            "targetId" to targetId,
+            "targetName" to targetName,
+            "status" to "ACTIVE",
+            "createdAt" to System.currentTimeMillis()
+        )
+
+        db.collection("rooms").document(roomId).set(roomDoc)
+            .addOnSuccessListener {
+                // Update target user's queue entry
+                db.collection("matchmaking_queue").document(targetId).update(
+                    mapOf(
+                        "status" to "MATCHED",
+                        "matchedRoomId" to roomId,
+                        "matchedWith" to initiatorId,
+                        "partnerName" to initiatorName,
+                        "partnerCountryCode" to initiatorCountry.code,
+                        "partnerCountryName" to initiatorCountry.name,
+                        "partnerCountryFlag" to initiatorCountry.flag
+                    )
+                )
+
+                // Immediately connect initiator directly without waiting
+                if (isSearching) {
+                    isSearching = false
+                    stopSearchingKeepRoom()
+
+                    val partner = PartnerProfile(
+                        id = targetId,
+                        name = targetName,
+                        age = 23,
+                        country = Country(
+                            code = targetCountryCode,
+                            name = targetCountryName,
+                            flag = targetCountryFlag
+                        ),
+                        bio = "🟢 Real Online Mobile Device",
+                        avatarBgColor = 0xFF1B5E20,
+                        avatarEmoji = "📱",
+                        videoTone = "neon",
+                        greetings = listOf("Hello! Connected with you from my phone!"),
+                        isRealDevice = true
+                    )
+
+                    onMatchedCallback?.invoke(partner, roomId)
+                    joinRoom(roomId)
+                }
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "Failed to create matched room", e)
+            }
+    }
+
+    private fun startWebSocketLobby(
+        userName: String,
+        gender: Gender,
+        country: Country
+    ) {
         val request = Request.Builder()
             .url("$NTFY_BASE_WS/$LOBBY_TOPIC/ws")
             .build()
 
         lobbyWebSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "Lobby WebSocket connected.")
-                // Send immediate search broadcast
                 broadcastSearch(userName, gender, country)
             }
 
@@ -85,14 +343,13 @@ object RealtimeMatchmaker {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.w(TAG, "Lobby WebSocket failure: ${t.message}")
+                Log.w(TAG, "Lobby WebSocket notice: ${t.message}")
             }
         })
 
-        // Heartbeat broadcast every 2.5 seconds to find other real devices
         heartbeatJob = scope.launch {
             while (isActive && isSearching) {
-                delay(2500)
+                delay(3000)
                 if (isSearching) {
                     broadcastSearch(userName, gender, country)
                 }
@@ -115,7 +372,7 @@ object RealtimeMatchmaker {
                 }
                 postHttp(LOBBY_TOPIC, json.toString())
             } catch (e: Exception) {
-                Log.e(TAG, "broadcastSearch error", e)
+                // Ignore network blips
             }
         }
     }
@@ -139,14 +396,12 @@ object RealtimeMatchmaker {
             if (event == "SEARCH") {
                 val otherId = payload.optString("userId")
                 if (otherId.isNotBlank() && otherId != myClientId) {
-                    // We found another real mobile device in the lobby!
                     val otherName = payload.optString("userName", "Real User")
                     val otherGender = payload.optString("gender", "MALE")
                     val otherCountryCode = payload.optString("countryCode", "NP")
                     val otherCountryName = payload.optString("countryName", "Nepal")
                     val otherCountryFlag = payload.optString("countryFlag", "🇳🇵")
 
-                    // Deterministic match initiator to prevent duplicate offers:
                     if (myClientId < otherId) {
                         val roomId = "room_${myClientId}_${otherId}"
                         val matchPayload = JSONObject().apply {
@@ -178,9 +433,8 @@ object RealtimeMatchmaker {
                 val roomId = payload.optString("roomId")
 
                 if (myClientId == initiatorId && targetId != myClientId) {
-                    // Match succeeded as initiator!
                     isSearching = false
-                    stopLobbyWebSocket()
+                    stopSearchingKeepRoom()
 
                     val partner = PartnerProfile(
                         id = targetId,
@@ -203,9 +457,8 @@ object RealtimeMatchmaker {
                     joinRoom(roomId)
 
                 } else if (myClientId == targetId && initiatorId != myClientId) {
-                    // Match succeeded as target!
                     isSearching = false
-                    stopLobbyWebSocket()
+                    stopSearchingKeepRoom()
 
                     val partner = PartnerProfile(
                         id = initiatorId,
@@ -233,45 +486,111 @@ object RealtimeMatchmaker {
         }
     }
 
-    fun stopSearching() {
-        isSearching = false
+    private fun stopSearchingKeepRoom() {
         heartbeatJob?.cancel()
         heartbeatJob = null
-        stopLobbyWebSocket()
+        firestoreHeartbeatJob?.cancel()
+        firestoreHeartbeatJob = null
+        queueListener?.remove()
+        queueListener = null
+        myDocListener?.remove()
+        myDocListener = null
+        try {
+            lobbyWebSocket?.close(1000, "Matched")
+        } catch (e: Exception) {}
+        lobbyWebSocket = null
+
+        // Remove from queue
+        try {
+            db.collection("matchmaking_queue").document(myClientId).delete()
+        } catch (e: Exception) {}
     }
 
-    private fun stopLobbyWebSocket() {
-        try {
-            lobbyWebSocket?.close(1000, "Stop searching")
-        } catch (e: Exception) {
-            // ignore
-        }
-        lobbyWebSocket = null
+    fun stopSearching() {
+        isSearching = false
+        stopSearchingKeepRoom()
     }
 
     /**
      * Join private paired room for real-time chat, typing, and emoji reactions.
+     * Uses Firestore snapshot listeners as authoritative cross-device state channel.
      */
     fun joinRoom(roomId: String) {
         leaveCurrentRoom()
         currentRoomId = roomId
 
+        // 1. Listen to Room document (for partner disconnect / state changes)
+        try {
+            roomDocListener = db.collection("rooms").document(roomId)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                    val status = snapshot.getString("status")
+                    if (status == "ENDED") {
+                        Log.d(TAG, "Room status changed to ENDED by partner.")
+                        onPartnerLeftCallback?.invoke()
+                    }
+                }
+
+            // 2. Listen to Messages subcollection in real time
+            roomMessagesListener = db.collection("rooms").document(roomId)
+                .collection("messages")
+                .orderBy("timestamp")
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null) return@addSnapshotListener
+                    for (docChange in snapshot.documentChanges) {
+                        if (docChange.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
+                            val doc = docChange.document
+                            val senderId = doc.getString("senderId")
+                            if (senderId != null && senderId != myClientId) {
+                                val text = doc.getString("text") ?: ""
+                                val senderName = doc.getString("senderName") ?: "Partner"
+                                val chatMsg = ChatMessage(
+                                    id = doc.id,
+                                    senderIsMe = false,
+                                    senderName = senderName,
+                                    text = text,
+                                    timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
+                                )
+                                onChatMessageCallback?.invoke(chatMsg)
+                            }
+                        }
+                    }
+                }
+
+            // 3. Listen to Signals (reactions, typing indicators)
+            roomSignalsListener = db.collection("rooms").document(roomId)
+                .collection("signals").document("events")
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                    val senderId = snapshot.getString("senderId")
+                    if (senderId != null && senderId != myClientId) {
+                        val reaction = snapshot.getString("reaction")
+                        if (!reaction.isNullOrBlank()) {
+                            onReactionCallback?.invoke(reaction)
+                        }
+                        val typing = snapshot.getBoolean("typing")
+                        if (typing != null) {
+                            onPartnerTypingCallback?.invoke(typing)
+                        }
+                    }
+                }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "joinRoom Firestore error", e)
+        }
+
+        // Auxiliary WebSocket connection
         val roomTopic = "vibetv_$roomId"
         val request = Request.Builder()
             .url("$NTFY_BASE_WS/$roomTopic/ws")
             .build()
 
         roomWebSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "Joined room WS: $roomTopic")
-            }
-
             override fun onMessage(webSocket: WebSocket, text: String) {
                 handleRoomMessage(text)
             }
-
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.w(TAG, "Room WS failure: ${t.message}")
+                Log.w(TAG, "Room WS notice: ${t.message}")
             }
         })
     }
@@ -285,7 +604,7 @@ object RealtimeMatchmaker {
 
             val payload = JSONObject(payloadStr)
             val senderId = payload.optString("senderId")
-            if (senderId == myClientId) return // Ignore own broadcast echoes
+            if (senderId == myClientId) return
 
             when (payload.optString("type")) {
                 "CHAT" -> {
@@ -305,8 +624,10 @@ object RealtimeMatchmaker {
                     onPartnerTypingCallback?.invoke(isTyping)
                 }
                 "REACTION" -> {
-                    val emoji = payload.optString("emoji", "❤️")
-                    onReactionCallback?.invoke(emoji)
+                    val emoji = payload.optString("emoji")
+                    if (emoji.isNotBlank()) {
+                        onReactionCallback?.invoke(emoji)
+                    }
                 }
                 "LEAVE" -> {
                     onPartnerLeftCallback?.invoke()
@@ -319,7 +640,21 @@ object RealtimeMatchmaker {
 
     fun sendChatMessage(text: String, myName: String) {
         val roomId = currentRoomId ?: return
-        val roomTopic = "vibetv_$roomId"
+
+        // 1. Write to Firestore
+        try {
+            val msgDoc = hashMapOf(
+                "senderId" to myClientId,
+                "senderName" to myName,
+                "text" to text,
+                "timestamp" to System.currentTimeMillis()
+            )
+            db.collection("rooms").document(roomId).collection("messages").add(msgDoc)
+        } catch (e: Exception) {
+            Log.w(TAG, "Firestore sendChatMessage error", e)
+        }
+
+        // 2. Auxiliary WebSocket broadcast
         scope.launch {
             try {
                 val json = JSONObject().apply {
@@ -327,18 +662,20 @@ object RealtimeMatchmaker {
                     put("senderId", myClientId)
                     put("senderName", myName)
                     put("text", text)
-                    put("timestamp", System.currentTimeMillis())
                 }
-                postHttp(roomTopic, json.toString())
-            } catch (e: Exception) {
-                Log.e(TAG, "sendChatMessage error", e)
-            }
+                postHttp("vibetv_$roomId", json.toString())
+            } catch (e: Exception) {}
         }
     }
 
     fun sendTyping(isTyping: Boolean) {
         val roomId = currentRoomId ?: return
-        val roomTopic = "vibetv_$roomId"
+
+        try {
+            db.collection("rooms").document(roomId).collection("signals").document("events")
+                .set(mapOf("senderId" to myClientId, "typing" to isTyping, "timestamp" to System.currentTimeMillis()))
+        } catch (e: Exception) {}
+
         scope.launch {
             try {
                 val json = JSONObject().apply {
@@ -346,16 +683,19 @@ object RealtimeMatchmaker {
                     put("senderId", myClientId)
                     put("isTyping", isTyping)
                 }
-                postHttp(roomTopic, json.toString())
-            } catch (e: Exception) {
-                Log.e(TAG, "sendTyping error", e)
-            }
+                postHttp("vibetv_$roomId", json.toString())
+            } catch (e: Exception) {}
         }
     }
 
     fun sendReaction(emoji: String) {
         val roomId = currentRoomId ?: return
-        val roomTopic = "vibetv_$roomId"
+
+        try {
+            db.collection("rooms").document(roomId).collection("signals").document("events")
+                .set(mapOf("senderId" to myClientId, "reaction" to emoji, "timestamp" to System.currentTimeMillis()))
+        } catch (e: Exception) {}
+
         scope.launch {
             try {
                 val json = JSONObject().apply {
@@ -363,41 +703,53 @@ object RealtimeMatchmaker {
                     put("senderId", myClientId)
                     put("emoji", emoji)
                 }
-                postHttp(roomTopic, json.toString())
-            } catch (e: Exception) {
-                Log.e(TAG, "sendReaction error", e)
-            }
+                postHttp("vibetv_$roomId", json.toString())
+            } catch (e: Exception) {}
         }
     }
 
     fun leaveCurrentRoom() {
         val roomId = currentRoomId ?: return
-        val roomTopic = "vibetv_$roomId"
+        currentRoomId = null
+
+        // 1. Mark room as ENDED in Firestore
+        try {
+            db.collection("rooms").document(roomId).update("status", "ENDED")
+        } catch (e: Exception) {}
+
+        roomDocListener?.remove()
+        roomDocListener = null
+        roomMessagesListener?.remove()
+        roomMessagesListener = null
+        roomSignalsListener?.remove()
+        roomSignalsListener = null
+
+        // 2. Notify over WebSocket
         scope.launch {
             try {
                 val json = JSONObject().apply {
                     put("type", "LEAVE")
                     put("senderId", myClientId)
                 }
-                postHttp(roomTopic, json.toString())
-            } catch (e: Exception) {
-                // ignore
-            }
+                postHttp("vibetv_$roomId", json.toString())
+            } catch (e: Exception) {}
         }
+
         try {
-            roomWebSocket?.close(1000, "Leaving room")
-        } catch (e: Exception) {
-            // ignore
-        }
+            roomWebSocket?.close(1000, "Left room")
+        } catch (e: Exception) {}
         roomWebSocket = null
-        currentRoomId = null
     }
 
-    private fun postHttp(topic: String, jsonBody: String) {
-        val request = Request.Builder()
-            .url("$NTFY_BASE_HTTP/$topic")
-            .post(jsonBody.toRequestBody(jsonMediaType))
-            .build()
-        httpClient.newCall(request).execute().close()
+    private fun postHttp(topic: String, body: String) {
+        try {
+            val request = Request.Builder()
+                .url("$NTFY_BASE_HTTP/$topic")
+                .post(body.toRequestBody(jsonMediaType))
+                .build()
+            httpClient.newCall(request).execute().close()
+        } catch (e: Exception) {
+            // Silently fail if offline
+        }
     }
 }

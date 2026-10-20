@@ -1,8 +1,9 @@
 package com.example.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.PartnerRepository
+import com.example.data.AuthManager
 import com.example.model.ChatMessage
 import com.example.model.ChatConnectionState
 import com.example.model.Country
@@ -16,13 +17,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
 data class VideoChatUiState(
     val connectionState: ChatConnectionState = ChatConnectionState.IDLE,
-    val onlineUsersCount: Int = 2,
+    val onlineUsersCount: Int = 1,
     val selectedGender: Gender = Gender.MALE,
     val selectedCountry: Country = Country.ALL,
     val currentPartner: PartnerProfile? = null,
@@ -54,7 +54,9 @@ data class VideoChatUiState(
     val userName: String? = null
 )
 
-class VideoChatViewModel : ViewModel() {
+class VideoChatViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val authManager = AuthManager(application.applicationContext)
 
     private val _uiState = MutableStateFlow(VideoChatUiState())
     val uiState: StateFlow<VideoChatUiState> = _uiState.asStateFlow()
@@ -64,39 +66,28 @@ class VideoChatViewModel : ViewModel() {
     private var fullScreenEmojiJob: Job? = null
     var onSpeakRequested: ((text: String, countryCode: String) -> Unit)? = null
 
-    fun authenticateUser(name: String, email: String, gender: Gender = Gender.MALE) {
-        _uiState.update {
-            it.copy(
-                isUserSignedIn = true,
-                userName = name,
-                userEmail = email,
-                selectedGender = gender,
-                bannerNotice = "Welcome to VibeTV, $name!"
-            )
-        }
-        viewModelScope.launch {
-            delay(2500)
-            _uiState.update { if (it.bannerNotice?.startsWith("Welcome") == true) it.copy(bannerNotice = null) else it }
-        }
-    }
-
-    fun signInWithGoogle(name: String = "Google User", email: String = "user@gmail.com") {
-        authenticateUser(name, email)
-    }
-
-    fun signOut() {
-        stopChat()
-        _uiState.update {
-            it.copy(
-                isUserSignedIn = false,
-                userName = null,
-                userEmail = null,
-                showSettingsDialog = false
-            )
-        }
-    }
-
     init {
+        // Restore existing login session
+        val session = authManager.getPersistedSession()
+        if (session != null) {
+            _uiState.update {
+                it.copy(
+                    isUserSignedIn = true,
+                    userName = session.name,
+                    userEmail = session.email,
+                    selectedGender = session.gender
+                )
+            }
+            RealtimeMatchmaker.updateClientId(session.uid)
+        }
+
+        // Live real online count from Firestore queue
+        RealtimeMatchmaker.onRealOnlineCountChanged = { count ->
+            viewModelScope.launch {
+                _uiState.update { it.copy(onlineUsersCount = count) }
+            }
+        }
+
         // Real-time matchmaking callbacks connecting physical phones across the internet
         RealtimeMatchmaker.onMatchedCallback = { partner, _ ->
             viewModelScope.launch {
@@ -145,11 +136,12 @@ class VideoChatViewModel : ViewModel() {
             }
         }
 
+        // User requirement: automatically search for another real user when partner ends or leaves
         RealtimeMatchmaker.onPartnerLeftCallback = {
             viewModelScope.launch {
                 _uiState.update {
                     it.copy(
-                        bannerNotice = "Partner left the room.",
+                        bannerNotice = "Partner left. Searching for real users…",
                         connectionState = ChatConnectionState.SEARCHING,
                         currentPartner = null,
                         partnerSpeechBubble = null,
@@ -166,6 +158,78 @@ class VideoChatViewModel : ViewModel() {
                     country = state.selectedCountry
                 )
             }
+        }
+    }
+
+    fun loginUser(
+        emailOrUsername: String,
+        password: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = authManager.login(emailOrUsername, password)
+            if (result.isSuccess) {
+                val user = result.getOrThrow()
+                authenticateUser(user.name, user.email, user.gender, user.uid)
+                onResult(true, null)
+            } else {
+                onResult(false, result.exceptionOrNull()?.message ?: "Login failed")
+            }
+        }
+    }
+
+    fun registerUser(
+        name: String,
+        emailOrUsername: String,
+        password: String,
+        gender: Gender,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = authManager.register(name, emailOrUsername, password, gender)
+            if (result.isSuccess) {
+                val user = result.getOrThrow()
+                authenticateUser(user.name, user.email, user.gender, user.uid)
+                onResult(true, null)
+            } else {
+                onResult(false, result.exceptionOrNull()?.message ?: "Registration failed")
+            }
+        }
+    }
+
+    fun authenticateUser(name: String, email: String, gender: Gender = Gender.MALE, uid: String? = null) {
+        if (uid != null) {
+            RealtimeMatchmaker.updateClientId(uid)
+        }
+        _uiState.update {
+            it.copy(
+                isUserSignedIn = true,
+                userName = name,
+                userEmail = email,
+                selectedGender = gender,
+                bannerNotice = "Welcome to VibeTV, $name!"
+            )
+        }
+        viewModelScope.launch {
+            delay(2500)
+            _uiState.update { if (it.bannerNotice?.startsWith("Welcome") == true) it.copy(bannerNotice = null) else it }
+        }
+    }
+
+    fun signInWithGoogle(name: String = "Google User", email: String = "user@gmail.com") {
+        authenticateUser(name, email)
+    }
+
+    fun signOut() {
+        stopChat()
+        authManager.logout()
+        _uiState.update {
+            it.copy(
+                isUserSignedIn = false,
+                userName = null,
+                userEmail = null,
+                showSettingsDialog = false
+            )
         }
     }
 
@@ -221,7 +285,7 @@ class VideoChatViewModel : ViewModel() {
 
     fun sendEmojiReaction(emoji: String) {
         sendEmojiReactionLocally(emoji)
-        // Broadcast to real partner phone so it explodes on their screen too!
+        // Broadcast to real partner phone
         RealtimeMatchmaker.sendReaction(emoji)
     }
 
@@ -361,7 +425,7 @@ class VideoChatViewModel : ViewModel() {
         _uiState.update {
             it.copy(
                 selectedCountry = country,
-                bannerNotice = if (country.code == "ALL") "Matching with users worldwide 🌎" else "Active filter: ${country.flag} ${country.name}"
+                bannerNotice = if (country.code == "ALL") "Matching with real users worldwide 🌎" else "Active filter: ${country.flag} ${country.name}"
             )
         }
         viewModelScope.launch {
@@ -390,4 +454,9 @@ class VideoChatViewModel : ViewModel() {
         it.copy(showChatDrawer = show, unreadMessageCount = if (show) 0 else it.unreadMessageCount)
     }
     fun setShowSettingsDialog(show: Boolean) = _uiState.update { it.copy(showSettingsDialog = show) }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopChat()
+    }
 }

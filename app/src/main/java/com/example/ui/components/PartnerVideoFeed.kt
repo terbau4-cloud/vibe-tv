@@ -403,27 +403,5 @@ fun PartnerVideoFeed(
                 }
             }
         }
-
-
-        // Next partner button
-        Button(
-            onClick = onSkip,
-            shape = RoundedCornerShape(20.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF473A)),
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 12.dp, bottom = 12.dp)
-                .testTag("skip_partner_button")
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("NEXT", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = "Next",
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-        }
     }
 }

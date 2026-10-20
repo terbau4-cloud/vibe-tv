@@ -41,14 +41,15 @@ class MainActivity : ComponentActivity() {
                         .systemBarsPadding()
                 ) { innerPadding ->
                     if (!uiState.isUserSignedIn) {
-                        // "continue with google hatau ani login and register page hala yesto bala"
                         AuthScreen(
-                            onAuthSuccess = { name, email, gender ->
-                                viewModel.authenticateUser(
-                                    name = name,
-                                    email = email,
-                                    gender = gender
-                                )
+                            onLogin = { emailOrUsername, password, onResult ->
+                                viewModel.loginUser(emailOrUsername, password, onResult)
+                            },
+                            onRegister = { name, emailOrUsername, password, gender, onResult ->
+                                viewModel.registerUser(name, emailOrUsername, password, gender, onResult)
+                            },
+                            onGoogleSignIn = {
+                                viewModel.signInWithGoogle()
                             },
                             modifier = Modifier.fillMaxSize()
                         )
